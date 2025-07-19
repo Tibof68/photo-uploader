@@ -1,54 +1,58 @@
-export const config = {
-  runtime: 'edge',
-};
+import crypto from 'crypto';
 
-export default async function handler(req) {
+export default async function handler(req, res) {
   if (req.method !== 'POST') {
-    return new Response(JSON.stringify({ error: 'Method not allowed' }), {
-      status: 405,
-      headers: { 'Content-Type': 'application/json' },
-    });
+    return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  try {
-    const { filename, filedata } = await req.json();
+  const {
+    R2_ACCOUNT_ID,
+    R2_ACCESS_KEY_ID,
+    R2_SECRET_ACCESS_KEY,
+    R2_BUCKET_NAME
+  } = process.env;
 
-    if (!filename || !filedata) {
-      return new Response(JSON.stringify({ error: 'Missing fields' }), {
-        status: 400,
-        headers: { 'Content-Type': 'application/json' },
-      });
-    }
-
-    const uploadUrl = `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com/${process.env.R2_BUCKET_NAME}/${filename}`;
-
-    const uploadRes = await fetch(uploadUrl, {
-      method: 'PUT',
-      headers: {
-        'Content-Type': 'image/jpeg',
-        'Authorization': `AWS ${process.env.R2_ACCESS_KEY_ID}:${process.env.R2_SECRET_ACCESS_KEY}`,
-      },
-      body: Uint8Array.from(atob(filedata), c => c.charCodeAt(0))
-    });
-
-    if (!uploadRes.ok) {
-      return new Response(JSON.stringify({ error: 'Upload failed' }), {
-        status: 401,
-        headers: { 'Content-Type': 'application/json' },
-      });
-    }
-
-    const publicUrl = `https://${process.env.R2_PUBLIC_DOMAIN}/${filename}`;
-
-    return new Response(JSON.stringify({ url: publicUrl }), {
-      status: 200,
-      headers: { 'Content-Type': 'application/json' },
-    });
-
-  } catch (e) {
-    return new Response(JSON.stringify({ error: e.message }), {
-      status: 500,
-      headers: { 'Content-Type': 'application/json' },
-    });
+  if (!R2_ACCOUNT_ID || !R2_ACCESS_KEY_ID || !R2_SECRET_ACCESS_KEY || !R2_BUCKET_NAME) {
+    return res.status(500).json({ error: 'Missing environment variables' });
   }
+
+  const base64Data = req.body?.image;
+
+  if (!base64Data) {
+    return res.status(400).json({ error: 'Missing image data' });
+  }
+
+  const fileBuffer = Buffer.from(base64Data, 'base64');
+  const fileName = 'photo.jpg'; // nom fixe pour que l’URL ne change pas
+  const contentType = 'image/jpeg';
+
+  const now = new Date().toUTCString();
+  const endpoint = `https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com`;
+  const path = `/${R2_BUCKET_NAME}/${fileName}`;
+  const stringToSign = `PUT\n\n${contentType}\n${now}\n${path}`;
+
+  const signature = crypto
+    .createHmac('sha1', R2_SECRET_ACCESS_KEY)
+    .update(stringToSign)
+    .digest('base64');
+
+  const authHeader = `AWS ${R2_ACCESS_KEY_ID}:${signature}`;
+
+  const uploadResponse = await fetch(`${endpoint}/${R2_BUCKET_NAME}/${fileName}`, {
+    method: 'PUT',
+    headers: {
+      'Content-Type': contentType,
+      'Date': now,
+      'Authorization': authHeader,
+    },
+    body: fileBuffer,
+  });
+
+  if (!uploadResponse.ok) {
+    const error = await uploadResponse.text();
+    return res.status(uploadResponse.status).json({ error: 'Upload to R2 failed', details: error });
+  }
+
+  const imageUrl = `https://${R2_ACCOUNT_ID}.r2.dev/${fileName}`;
+  return res.status(200).json({ message: 'Upload successful', url: imageUrl });
 }
