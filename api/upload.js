@@ -11,9 +11,7 @@ export default async function handler(req) {
   }
 
   try {
-    const body = await req.json();
-
-    const { filename, filedata } = body;
+    const { filename, filedata } = await req.json();
 
     if (!filename || !filedata) {
       return new Response(JSON.stringify({ error: 'Missing fields' }), {
@@ -22,7 +20,6 @@ export default async function handler(req) {
       });
     }
 
-    // ⬇️ Préparer l’envoi vers Cloudflare R2
     const uploadUrl = `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com/${process.env.R2_BUCKET_NAME}/${filename}`;
 
     const uploadRes = await fetch(uploadUrl, {
@@ -31,7 +28,7 @@ export default async function handler(req) {
         'Content-Type': 'image/jpeg',
         'Authorization': `AWS ${process.env.R2_ACCESS_KEY_ID}:${process.env.R2_SECRET_ACCESS_KEY}`,
       },
-      body: Buffer.from(filedata, 'base64'),
+      body: Uint8Array.from(atob(filedata), c => c.charCodeAt(0))
     });
 
     if (!uploadRes.ok) {
