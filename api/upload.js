@@ -1,58 +1,25 @@
-import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
-
-export const config = {
-  api: {
-    bodyParser: {
-      sizeLimit: "10mb", // pour les images
-    },
-  },
-};
-
 export default async function handler(req, res) {
-  if (req.method !== "POST") {
-    return res.status(405).json({ error: "Méthode non autorisée" });
+  if (req.method !== 'PUT') {
+    return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const { imageBase64 } = req.body;
-
-  if (!imageBase64) {
-    return res.status(400).json({ error: "imageBase64 manquant" });
-  }
+  const bucketUrl = 'https://pub-410415b6228c4a169301887ee062d0b1.r2.dev/photo.jpg';
 
   try {
-    const accountId = process.env.ACCOUNT_ID;
-    const accessKeyId = process.env.ACCESS_KEY_ID;
-    const secretAccessKey = process.env.SECRET_ACCESS_KEY;
-    const bucketName = process.env.BUCKET_NAME;
-    const region = "auto";
-    const uploadFileName = "photo.jpg";
-
-    const imageBuffer = Buffer.from(imageBase64, "base64");
-
-    const client = new S3Client({
-      region,
-      endpoint: `https://${accountId}.r2.cloudflarestorage.com`,
-      credentials: {
-        accessKeyId,
-        secretAccessKey,
+    const upload = await fetch(bucketUrl, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'image/jpeg'
       },
+      body: req.body
     });
 
-    const uploadParams = {
-      Bucket: bucketName,
-      Key: uploadFileName,
-      Body: imageBuffer,
-      ContentType: "image/jpeg",
-      ACL: "public-read", // Si nécessaire, selon ta config R2
-    };
+    if (!upload.ok) {
+      return res.status(upload.status).json({ error: 'Upload failed' });
+    }
 
-    await client.send(new PutObjectCommand(uploadParams));
-
-    const publicUrl = `https://${bucketName}.r2.dev/${uploadFileName}`;
-    res.status(200).json({ url: publicUrl });
-
+    return res.status(200).json({ message: 'Upload success' });
   } catch (err) {
-    console.error("❌ Upload failed:", err);
-    res.status(500).json({ error: "Erreur serveur", details: err.message });
+    return res.status(500).json({ error: 'Upload error', details: err.message });
   }
 }
