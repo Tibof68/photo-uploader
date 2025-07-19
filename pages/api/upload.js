@@ -3,35 +3,46 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const { R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET, UPLOAD_FILENAME } = process.env;
+  const crypto = await import('node:crypto');
 
-  if (!R2_ACCOUNT_ID || !R2_ACCESS_KEY_ID || !R2_SECRET_ACCESS_KEY || !R2_BUCKET || !UPLOAD_FILENAME) {
-    return res.status(500).json({ error: 'Missing environment variables' });
+  const { R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET_NAME } = process.env;
+  const region = 'auto'; // Pour Cloudflare
+  const fileName = 'photo.jpg'; // Nom fixe pour l’URL
+
+  const base64Data = req.body?.image;
+  if (!base64Data) {
+    return res.status(400).json({ error: 'Missing image data' });
   }
 
-  const fileBuffer = await req.arrayBuffer();
-  const endpoint = `https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com`;
-  const uploadUrl = `${endpoint}/${UPLOAD_FILENAME}`;
+  const buffer = Buffer.from(base64Data, 'base64');
 
-  const response = await fetch(uploadUrl, {
+  const endpoint = `https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com`;
+  const url = `${endpoint}/${R2_BUCKET_NAME}/${fileName}`;
+
+  const date = new Date().toUTCString();
+  const contentType = 'image/jpeg';
+  const method = 'PUT';
+  const canonicalString = `${method}\n\n${contentType}\n${date}\n/${R2_BUCKET_NAME}/${fileName}`;
+  const signature = crypto.createHmac('sha1', R2_SECRET_ACCESS_KEY).update(canonicalString).digest('base64');
+  const authorization = `AWS ${R2_ACCESS_KEY_ID}:${signature}`;
+
+  const uploadRes = await fetch(url, {
     method: 'PUT',
     headers: {
-      'Content-Type': 'image/jpeg',
-      'Content-Length': fileBuffer.byteLength,
-      'Authorization': 'AWS ' + R2_ACCESS_KEY_ID + ':' + signAWS(R2_SECRET_ACCESS_KEY, 'PUT', UPLOAD_FILENAME),
+      'Content-Type': contentType,
+      'Date': date,
+      'Authorization': authorization,
     },
-    body: Buffer.from(fileBuffer),
+    body: buffer,
   });
 
-  if (!response.ok) {
-    return res.status(response.status).json({ error: 'Upload failed' });
+  if (!uploadRes.ok) {
+    const errorText = await uploadRes.text();
+    return res.status(uploadRes.status).json({ error: 'Upload to R2 failed', details: errorText });
   }
 
-  const publicUrl = `https://${R2_ACCOUNT_ID}.r2.dev/${UPLOAD_FILENAME}`;
-  return res.status(200).json({ url: publicUrl });
-}
-
-// ⚠️ Simulé — à remplacer par signature valide si besoin (Cloudflare peut aussi gérer des tokens pré-signés)
-function signAWS(secretKey, method, fileName) {
-  return 'dummy-signature'; // Juste pour test local, remplacer par signature AWS si nécessaire
+  return res.status(200).json({
+    message: 'Upload successful',
+    url: `https://${R2_ACCOUNT_ID}.r2.dev/${fileName}`,
+  });
 }
