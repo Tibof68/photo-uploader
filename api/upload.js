@@ -1,5 +1,4 @@
-import crypto from "crypto";
-import fetch from "node-fetch";
+import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {
@@ -7,55 +6,42 @@ export default async function handler(req, res) {
   }
 
   try {
-    const { fileName, fileData } = req.body;
+    const { image, fileName } = JSON.parse(req.body);
 
-    if (!fileName || !fileData) {
-      return res.status(400).json({ error: "Missing fileName or fileData" });
+    if (!image) {
+      return res.status(400).json({ error: "No image provided" });
     }
 
-    // Infos Cloudflare R2 depuis tes variables d'environnement Vercel
-    const accountId = process.env.R2_ACCOUNT_ID;
-    const accessKey = process.env.R2_ACCESS_KEY_ID;
-    const secretKey = process.env.R2_SECRET_ACCESS_KEY;
-    const bucketName = process.env.R2_BUCKET_NAME;
+    // 🔹 Nom de fichier : si fileName existe → on l'utilise, sinon photo.jpg
+    const finalName = fileName && fileName.trim() !== "" ? fileName : "photo.jpg";
 
-    const region = "auto";
-    const endpoint = `https://${accountId}.r2.cloudflarestorage.com/${bucketName}/${fileName}`;
+    const buffer = Buffer.from(image, "base64");
 
-    // Conversion base64 → Buffer
-    const buffer = Buffer.from(fileData, "base64");
-
-    // Signature S3 (simple PUT)
-    const date = new Date().toUTCString();
-    const stringToSign = `PUT\n\nimage/jpeg\n${date}\n/${bucketName}/${fileName}`;
-    const signature = crypto
-      .createHmac("sha1", secretKey)
-      .update(stringToSign)
-      .digest("base64");
-
-    const authHeader = `AWS ${accessKey}:${signature}`;
-
-    const putRes = await fetch(endpoint, {
-      method: "PUT",
-      headers: {
-        "Content-Type": "image/jpeg",
-        "Date": date,
-        "Authorization": authHeader
+    const client = new S3Client({
+      region: "auto",
+      endpoint: `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
+      credentials: {
+        accessKeyId: process.env.R2_ACCESS_KEY_ID,
+        secretAccessKey: process.env.R2_SECRET_ACCESS_KEY,
       },
-      body: buffer
     });
 
-    if (!putRes.ok) {
-      const errText = await putRes.text();
-      return res.status(500).json({ error: "Upload failed", details: errText });
-    }
+    const command = new PutObjectCommand({
+      Bucket: process.env.R2_BUCKET_NAME,
+      Key: finalName,
+      Body: buffer,
+      ContentType: "image/jpeg",
+      ACL: "public-read", // si nécessaire
+    });
 
-    // URL publique
-    const publicUrl = `https://pub-${accountId}.r2.dev/${fileName}`;
-    res.status(200).json({ url: publicUrl });
+    await client.send(command);
 
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "Server error", details: err.message });
+    const publicUrl = `https://${process.env.R2_BUCKET_PUBLIC_DOMAIN}/${finalName}`;
+
+    res.status(200).json({ success: true, url: publicUrl });
+
+  } catch (error) {
+    console.error("Upload error:", error);
+    res.status(500).json({ error: "Upload failed" });
   }
 }
